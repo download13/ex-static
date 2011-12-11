@@ -11,7 +11,7 @@ var static = require('static');
 
 var staticFiles = [
 	{url: '/', path: 'static/index.html'},
-	{url: '/test.jar', path: 'static/test.jar', type: 'application/java-archive', cache: true, conpress: true}
+	{url: '/test.jar', path: 'static/test.jar', type: 'application/java-archive', cache: true, compress: true}
 ];
 
 var app = express.createServer();
