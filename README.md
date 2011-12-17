@@ -7,7 +7,7 @@ WARNING: DO NOT USE ON LARGE FILES!
 ### To use:
 ```javascript
 var express = require('express');
-var static = require('static');
+var static = require('static').static;
 
 var staticFiles = [
 	{url: '/', path: 'static/index.html'},
