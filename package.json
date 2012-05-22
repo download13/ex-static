@@ -1,8 +1,8 @@
 {
 	"name": "static",
-	"description": "Fast, static file server middleware with builtin revving",
+	"description": "Fast, static file server middleware with built-in revving",
 	"author": "download <download333@gmail.com>",
-	"main": "./lib/static.js",
+	"main": "./static.js",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/download13/static"
