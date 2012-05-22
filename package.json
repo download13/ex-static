@@ -1,6 +1,7 @@
 {
 	"name": "static",
 	"description": "Fast, static file server middleware with built-in revving",
+	"version": "0.2.0",
 	"author": "download <download333@gmail.com>",
 	"main": "./static.js",
 	"repository": {
