@@ -68,7 +68,7 @@ FileServer.prototype = {
 			url: url, // URL path
 			data: data, // The content
 			compressed: null, // Compressed version of the content, this will be added when it's done compressing
-			etag: etag, // An ETag string to caching purposes
+			etag: etag, // An ETag string for caching purposes
 			loadedDate: new Date().getTime()
 		};
 		
@@ -103,18 +103,19 @@ FileServer.prototype = {
 			var not_modified = false;
 			var headers =  headers = {'Content-Type': t.type, 'ETag': t.etag};
 			
-			var ms = req.headers['if-modified-since'], nm = req.headers['if-none-match'];
-			if(ms != null && t.loadedDate <= new Date(ms).getTime()) { // If their entity is up-to-date
+			var modifiedSince = req.headers['if-modified-since'], noneMatch = req.headers['if-none-match'];
+			if(modifiedSince != null && t.loadedDate <= new Date(modifiedSince).getTime()) { // If their entity is up-to-date
 				not_modified = true;
-			} else if(nm != null && nm == t.etag) { // If the etags match
+			} else if(noneMatch != null && noneMatch == t.etag) { // If the etags match
 				not_modified = true;
 			}
 			
 			if(not_modified) {
 				res.writeHead(304);
 				res.end();
-			} else { // Send back the usual data   
-				if(t.compressed != null && req.headers['accept-encoding'].indexOf('gzip') != -1) { // The file and browser support gzip compression
+			} else {
+				var acceptEncoding = req.headers['accept-encoding'];
+				if(t.compressed != null && acceptEncoding != null && acceptEncoding.indexOf('gzip') != -1) { // The file and browser support gzip compression
 					data = t.compressed;
 					headers['Content-Encoding'] = 'gzip';
 				} else {
