@@ -1,5 +1,5 @@
 ex-static
-==
+=========
 
 **WARNING: DO NOT USE ON LARGE FILES!**
 `ex-static` keeps all file data in memory and so is not recommended for files larger than a megabyte (unless you have a lot of spare RAM).
@@ -40,3 +40,6 @@ This is useful for ensuring that users have the latest version of a file even if
 <body></body>
 </html>
 ```
+
+### Caveats:
+* Do not accidentally call a `next()` function more than once in the same handler. It will cause strange behavior like handlers being called out of order or too many times.

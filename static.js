@@ -2,149 +2,147 @@ var fs = require('fs');
 var url = require('url');
 var zlib = require('zlib');
 var crypto = require('crypto');
+var mime = require('mime');
 
-var MIME_TYPES = [
-	[/\.html$/, 'text/html'],
-	[/\.js$/, 'text/javascript'],
-	[/\.css$/, 'text/css'],
-	[/\.txt$/, 'text/plain'],
+function loadFile(filename, cb) {
+	var file = {path: filename};
 	
-	[/\.jpg$/, 'image/jpeg'],
-	[/\.png$/, 'image/png'],
-	[/\.gif$/, 'image/gif'],
-	
-	[/\.ogg$/, 'application/ogg'],
-	[/\.ogv$/, 'video/ogg'],
-	[/\.oga$/, 'audio/ogg'],
-	[/\.mp3$/, 'audio/mp3'],
-	[/\.wav$/, 'audio/wav'],
-	
-	[/\.jar$/, 'application/java-archive']
-];
-var TIMESTAMP = Date.now().toString();
-
-function FileServer() {
-	this.staticCache = {};
-	this.handleRequest = this.handleRequest.bind(this);
+	fs.readFile(filename, function(err, data) {
+		if(err) return cb(file);
+		
+		var type = mime.lookup(filename);
+		
+		file.type = type;
+		file.etag = '"' + crypto.createHash('md5').update(data).digest('hex') + '"';
+		file.data = data;
+		cb(file);
+	});
 }
 
-// A URL of * will match all requests not matched by another handler
-
-FileServer.prototype = {
-	addFile: function(options) {
-		var self = this;
-		
-		var url = options.url;
-		var path = options.path;
-		var type = options.type;
-		var cache = Boolean(options.cache);
-		var compress = Boolean(options.compress);
-		
-		if(type == null) { // Find out what the MIME type is
-			for(var i = 0; i < MIME_TYPES.length; i++) { // Check each one against the file extension until...
-				var t = MIME_TYPES[i];
-				if(path.match(t[0])) {
-					type = t[1];
-					break;
-				}
-			}
-			if(type == null) {
-				type = 'text/plain';
-			}
-		}
-		
-		var data = fs.readFileSync(path) || ''; // It's startup, and we're hoping nobody tried to use this for large files
-		
-		if(type == 'text/html') { // Rev the HTML files
-			data = data.toString('utf8').replace(/\{rev\}/g, TIMESTAMP);
-		}
-		
-		var etag = '"' + crypto.createHash('md5').update(data).digest('hex') + '"';
-		
-		this.staticCache[url] = {
-			type: type, // The MIME type of the content
-			cache: cache, // Boolean specifying whether to perma-cache
-			path: path, // Local filesystem path
-			url: url, // URL path
-			data: data, // The content
-			compressed: null, // Compressed version of the content, this will be added when it's done compressing
-			etag: etag, // An ETag string for caching purposes
-			loadedDate: new Date().getTime()
-		};
-		
-		if(compress || type.indexOf('text/') == 0 || type == 'application/javascript' || type == 'audio/wav') {
-			zlib.gzip(data, function(err, compressed) {
-				if((compressed.length < data.length - 1024 || compressed.length < data.length * 0.9)) {// If the compression ratio is good enough (at least a KB saved or at least 10%)
-					self.staticCache[url].compressed = compressed;
-					// console.log('Compressed ' + path);
-					// express logger
-				}// else {
-					// console.log("Didn't compress " + path);
-				//}
-			});
-		}
-		
-		// Disabled for now, no support on Windows
-		/*
-		fs.watchFile(path, function(c, p) {
-			fs.readFile(path, function(err, data) {
-				self.staticCache[path].data = data;
-			});
-		});
-		*/
-	},
+function finishFile(file, url, cache, compress, type, cb) {
+	if(file.data == null) return cb(file);
 	
-	handleRequest: function(req, res, next) {
-		var u = url.parse(req.url).pathname;
-		var t = this.staticCache[u] || this.staticCache['*'];
+	var now = Date.now();
+	file.timeLoaded = now;
+	file.url = url;
+	file.cache = cache;
+	
+	if(type != null) file.type = type;
+	if(file.type == 'text/html') { // Rev the HTML files
+		file.data = file.data.toString('utf8').replace(/\{rev\}/g, now.toString());
+	}
+	
+	if(compress || file.type.indexOf('text/') == 0 || file.type == 'application/javascript' || file.type == 'audio/x-wav') {
+		zlib.gzip(file.data, function(err, compressed) {
+			if((compressed.length < file.data.length - 512000 || compressed.length < file.data.length * 0.95)) { // If the compression ratio is good enough (at least 500KB saved or at least 5%)
+				file.compressed = compressed;
+			}
+			
+			cb(file);
+		});
+	} else {
+		cb(file);
+	}
+}
+
+function watchFile(filename, cb) {
+	var timeout;
+	try {
+		fs.watch(filename, {persistent: false}, changed);
+	} catch(e) {
+		if(e.code == 'ENOENT') {
+			console.warn('ex-static: File will not be watched or loaded as it does not exist: ' + filename);
+		} else throw e;
+	}
+	changed();
+	
+	function changed(type) {
+		if(timeout == null) { // Wait since events sometimes fire multiple times in quick succession
+			timeout = setTimeout(function() {
+				cb();
+				timeout = null;
+			}, 20);
+		}
+	}
+}
+
+function handleRequest(staticCache, req, res, next) {
+	var method = req.method.toUpperCase();
+	if(method != 'GET' && method != 'HEAD') {
+		if(next) next();
+		else {
+			res.writeHead(405);
+			res.end();
+		}
+		return;
+	}
+	
+	var file = staticCache[url.parse(req.url).pathname];
+	
+	if(file != null) {
+		var data;
+		var not_modified = false;
+		var headers = {'Content-Type': file.type, 'ETag': file.etag};
 		
-		if(t != null) {
-			var data;
-			var not_modified = false;
-			var headers =  headers = {'Content-Type': t.type, 'ETag': t.etag};
-			
-			var modifiedSince = req.headers['if-modified-since'], noneMatch = req.headers['if-none-match'];
-			if(modifiedSince != null && t.loadedDate <= new Date(modifiedSince).getTime()) { // If their entity is up-to-date
-				not_modified = true;
-			} else if(noneMatch != null && noneMatch == t.etag) { // If the etags match
-				not_modified = true;
-			}
-			
-			if(not_modified) {
-				res.writeHead(304);
-				res.end();
+		var modifiedSince = req.headers['if-modified-since'], noneMatch = req.headers['if-none-match'];
+		if(modifiedSince != null && file.timeLoaded <= new Date(modifiedSince).getTime()) { // If their entity is up-to-date
+			not_modified = true;
+		} else if(noneMatch != null && noneMatch == file.etag) { // If the etags match
+			not_modified = true;
+		}
+		
+		if(not_modified) {
+			res.writeHead(304);
+			res.end();
+		} else {
+			var acceptEncoding = req.headers['accept-encoding'];
+			if(file.compressed != null && acceptEncoding != null && acceptEncoding.indexOf('gzip') != -1) { // The file and browser support gzip compression
+				data = file.compressed;
+				headers['Content-Encoding'] = 'gzip';
 			} else {
-				var acceptEncoding = req.headers['accept-encoding'];
-				if(t.compressed != null && acceptEncoding != null && acceptEncoding.indexOf('gzip') != -1) { // The file and browser support gzip compression
-					data = t.compressed;
-					headers['Content-Encoding'] = 'gzip';
-				} else {
-					data = t.data;
-				}
-				headers['Content-Length'] = data.length;
-				
-				if(t.cache) { // Try to cache this file for a long time
-					headers['Cache-Control'] = 'max-age=31536000';
-				}
-				
-				if(req.method == 'HEAD') data = null;
-				res.writeHead(200, headers);
-				res.end(data);
-				// console.log('Serving static file ' + t.path + ' on ' + u);
-				// How do we log to the express logging system
+				data = file.data;
 			}
-		} else { // If not handled here
-			next();
+			headers['Content-Length'] = data.length;
+			
+			if(file.cache < 0) file.cache = 31536000;
+			if(file.cache > 0) {
+				headers['Cache-Control'] = 'max-age=' + file.cache;
+			}
+			
+			if(req.method == 'HEAD') data = null;
+			res.writeHead(200, headers);
+			res.end(data);
+			// How do we log?
+		}
+	} else {
+		if(next) next();
+		else { // No file and not in a middleware manager
+			res.writeHead(404);
+			res.end();
 		}
 	}
 }
 
 module.exports = function(files) {
-	var s = new FileServer();
+	var staticCache = {};
 	
-	for(var i = 0, l = files.length; i < l; i++) {
-		s.addFile(files[i]);
-	}
+	files.forEach(function(options) {
+		var url = options.url;
+		var filename = options.path;
+		var cache = options.cache;
+		
+		watchFile(filename, function() {
+			loadFile(filename, function(file) {
+				finishFile(file, url, cache, Boolean(options.compress), options.type, function(file) {
+					delete staticCache[url];
+					if(file.data != null) {
+						staticCache[url] = file;
+					}
+				});
+			});
+		});
+	});
 	
-	return s.handleRequest;
+	return handleRequest.bind(null, staticCache);
 }
+// TODO: Write tests and update README

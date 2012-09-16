@@ -1,12 +1,22 @@
 {
 	"name": "ex-static",
 	"description": "Fast, static file server middleware with built-in revving",
-	"version": "0.2.2",
+	"version": "0.3.0",
 	"author": "download <download333@gmail.com>",
-	"main": "./static.js",
+	"main": "static",
+	"scripts": {
+		"test": "moka"
+	},
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/download13/static"
+	},
+	"dependencies": {
+		"mime": "1.x.x"
+	},
+	"devDependencies": {
+		"moka": "*",
+		"expect.js": "*"
 	},
 	"engine": {
 		"node": "*"
