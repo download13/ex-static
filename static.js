@@ -105,7 +105,7 @@ function handleRequest(staticCache, req, res, next) {
 			headers['Content-Length'] = data.length;
 			
 			if(file.cache < 0) file.cache = 31536000;
-			if(file.cache > 0) {
+			else if(file.cache > 0) {
 				headers['Cache-Control'] = 'max-age=' + file.cache;
 			}
 			
