@@ -8,7 +8,6 @@ Now also watches files for changes and reloads them when needed.
 ### To use:
 ```javascript
 var http = require('http');
-var mw = require('simpleware').mw;
 var static = require('ex-static');
 
 var staticFiles = [
@@ -16,7 +15,7 @@ var staticFiles = [
 	{url: '/test.jar', path: 'static/test.jar', type: 'application/java-archive', cache: -1, compress: true}
 ];
 
-http.createServer(mw(staticFiles)).listen(80);
+http.createServer(staticFiles).listen(80);
 ```
 
 The `cache` parameter sets the number of seconds on the `Cache-Control: max-age` header. Using -1 sets a very large value while using 0 sets no header.
