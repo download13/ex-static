@@ -36,6 +36,3 @@ This is useful for ensuring that users have the latest version of a file even if
 <body></body>
 </html>
 ```
-
-### Caveats:
-* Do not accidentally call a `next()` function more than once in the same handler. It will cause strange behavior like handlers being called out of order or too many times.
