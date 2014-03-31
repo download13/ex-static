@@ -1,20 +1,22 @@
 var static = require('../static');
 var http = require('http');
 var fs = require('fs');
-var moka = require('moka');
-var describe = moka.describe;
-var expect = require('expect.js');
+var assert = require('assert');
+var path = require('path');
 
-var filename = require('path').join(__dirname, 'testfile.txt');
+var filename1 = path.join(__dirname, 'testfile1.txt');
+var filename2 = path.join(__dirname, 'testfile2.css');
+var testfile = path.join(__dirname, 'test.txt');
+fs.writeFileSync(testfile, fs.readFileSync(filename1));
+
 var CONTENT1 = '3k24jkl 3k24jkl 3k24jkl 3k24jkl';
 var CONTENT2 = 'kljkljdaslfjdi3qj4j32kl4j2kljflkfaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-fs.writeFileSync(filename, CONTENT1);
 
 var files;
-function request(method, path, headers, cb) {
+function request(method, url, headers, cb) {
 	var req = {
 		method: method,
-		url: path,
+		url: url,
 		headers: headers
 	};
 	var r = {};
@@ -35,43 +37,66 @@ function request(method, path, headers, cb) {
 	files(req, res);
 }
 
-describe('ex-static', function(it, before) {
+describe('ex-static', function() {
 	var etag;
 	before(function(done) {
-		files = static([{path: filename, url: '/', cache: 300}]);
+		files = static([
+			{path: testfile, url: '/', cache: 0},
+			{path: filename1, url: '/one', cache: 300},
+			{path: filename2, url: '/two', cache: 301},
+		]);
 		setTimeout(done, 500); // Give it time to load the files
+	});
+
+	it('should have type css', function(done) {
+		request('GET', '/one', {}, function(res) {
+			assert.equal(parseInt(res.headers['content-length']), CONTENT1.length);
+			assert.equal(res.headers['content-type'], 'text/plain');
+			assert.equal(res.body.length, Buffer.byteLength(CONTENT1));
+			assert.equal(res.headers['cache-control'], 'max-age=300');
+			done();
+		});
+	});
+	it('should have type text', function(done) {
+		request('GET', '/two', {}, function(res) {
+			assert.equal(parseInt(res.headers['content-length']), CONTENT2.length);
+			assert.equal(res.headers['content-type'], 'text/css');
+			assert.equal(res.body.length, Buffer.byteLength(CONTENT2));
+			assert.equal(res.headers['cache-control'], 'max-age=301');
+			done();
+		});
 	});
 	
 	it('should have the first content set', function(done) {
 		request('GET', '/', {}, function(res) {
-			expect(parseInt(res.headers['content-length'])).to.be(CONTENT1.length);
-			expect(res.headers['content-type']).to.be('text/plain');
-			expect(res.body.length).to.be(Buffer.byteLength(CONTENT1));
-			expect(res.headers['cache-control']).to.be('max-age=300');
+			assert.equal(parseInt(res.headers['content-length']), CONTENT1.length);
+			assert.equal(res.headers['content-type'], 'text/plain');
+			assert.equal(res.body.length, Buffer.byteLength(CONTENT1));
+			assert.equal(res.headers['cache-control'], undefined);
 			done();
 		});
 	});
 	
 	it('should get the new file contents after we change them', function(done) {
-		fs.writeFileSync(filename, CONTENT2);
+		fs.writeFileSync(testfile, CONTENT2);
 		setTimeout(function() { // Time to load the new one
 			request('GET', '/', {}, function(res) {
-				expect(parseInt(res.headers['content-length'])).to.be(CONTENT2.length);
-				expect(res.headers['content-type']).to.be('text/plain');
-				expect(res.body.length).to.be(Buffer.byteLength(CONTENT2));
+				assert.equal(parseInt(res.headers['content-length']), CONTENT2.length);
+				assert.equal(res.headers['content-type'], 'text/plain');
+				assert.equal(res.body.length, Buffer.byteLength(CONTENT2));
 				etag = res.headers['etag'];
 				done();
 			});
-		}, 100);
+		}, 50);
 	});
 	
 	it('should send compressed contents if supported', function(done) {
 		request('GET', '/', {'accept-encoding': 'gzip'}, function(res) {
-			expect(res.headers['content-encoding']).to.be('gzip');
-			expect(parseInt(res.headers['content-length'])).to.be(res.body.length);
-			expect(res.headers['content-type']).to.be('text/plain');
+			assert.equal(res.headers['content-encoding'], 'gzip');
+			assert.equal(parseInt(res.headers['content-length']), res.body.length);
+			assert.equal(res.headers['content-type'], 'text/plain');
 			require('zlib').gzip(CONTENT2, function(err, compressed) {
-				expect(res.body.length).to.be(compressed.length);
+				assert.equal(res.body.length, compressed.length);
 				done();
 			});
 		});
@@ -79,48 +104,45 @@ describe('ex-static', function(it, before) {
 	
 	it('should respond to if-modified-since', function(done) {
 		request('GET', '/', {'if-modified-since': new Date(Date.now() + 50000).toGMTString()}, function(res) {
-			expect(res.statusCode).to.be(304);
-			expect(res.body).to.not.be.ok();
+			assert.equal(res.statusCode, 304);
+			assert.equal(res.body, undefined);
 			done();
 		});
 	});
 	
 	it('should respond to if-none-match', function(done) {
 		request('GET', '/', {'if-none-match': etag}, function(res) {
-			expect(res.statusCode).to.be(304);
-			expect(res.body).to.not.be.ok();
+			assert.equal(res.statusCode, 304);
+			assert.equal(res.body, undefined);
 			done();
 		});
 	});
 	
 	it('should not include a body for a HEAD request', function(done) {
 		request('HEAD', '/', {}, function(res) {
-			expect(res.statusCode).to.be(200);
-			expect(res.body).to.not.be.ok();
-			expect(parseInt(res.headers['content-length'])).to.be(CONTENT2.length);
-			expect(res.headers['content-type']).to.be('text/plain');
-			expect(res.headers['etag']).to.be(etag);
+			assert.equal(res.statusCode, 200);
+			assert.equal(res.body, undefined);
+			assert.equal(parseInt(res.headers['content-length']), CONTENT2.length);
+			assert.equal(res.headers['content-type'], 'text/plain');
+			assert.equal(res.headers['etag'], etag);
 			done();
 		});
 	});
 	
 	it('should give a 405 on other methods', function(done) {
 		request('POST', '/', {}, function(res) {
-			expect(res.statusCode).to.be(405);
-			expect(res.body).to.not.be.ok();
+			assert.equal(res.statusCode, 405);
 			done();
 		});
 	});
 	
 	it('should return 404 if we delete the file', function(done) {
-		fs.unlinkSync(filename);
+		fs.unlinkSync(testfile);
 		setTimeout(function() { // Time to update
 			request('GET', '/', {}, function(res) {
-				expect(res.statusCode).to.be(404);
+				assert.equal(res.statusCode, 404);
 				done();
 			});
 		}, 100);
 	});
 });
-
-moka.run({parallel: false});
