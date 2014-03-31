@@ -4,145 +4,168 @@ var zlib = require('zlib');
 var crypto = require('crypto');
 var mime = require('mime');
 
-function loadFile(filename, cb) {
-	var file = {path: filename};
-	
-	fs.readFile(filename, function(err, data) {
-		if(err) return cb(file);
-		
-		var type = mime.lookup(filename);
-		
-		file.type = type;
-		file.etag = '"' + crypto.createHash('md5').update(data).digest('hex') + '"';
-		file.data = data;
-		cb(file);
-	});
-}
 
-function finishFile(file, url, cache, compress, type, cb) {
-	if(file.data == null) return cb(file);
-	
-	var now = Date.now();
-	file.timeLoaded = now;
-	file.url = url;
-	file.cache = cache;
-	
-	if(type != null) file.type = type;
-	if(file.type == 'text/html') { // Rev the HTML files
-		file.data = file.data.toString('utf8').replace(/\{rev\}/g, now.toString());
-	}
-	
-	if(compress || file.type.indexOf('text/') == 0 || file.type == 'application/javascript' || file.type == 'audio/x-wav') {
-		zlib.gzip(file.data, function(err, compressed) {
-			if((compressed.length < file.data.length - 512000 || compressed.length < file.data.length * 0.95)) { // If the compression ratio is good enough (at least 500KB saved or at least 5%)
-				file.compressed = compressed;
-			}
-			
-			cb(file);
-		});
-	} else {
-		cb(file);
-	}
-}
+var DEFAULT_MAX_SIZE = 200 * 1024;
+/*
+Options:
+url - url to serve from
+path - path to file
+cache - How long (in seconds) to cache this file, default is uncached
+type - Content type
+stream - Stream, or keep in memory
+compress - if we make compressed version available
+*/
+function File(opts) {
+	this.path = opts.path;
+	this.stream = opts.stream;
+	this.compress = opts.compress || true;
+	this.type = opts.type || mime.lookup(this.path);
+	this.cache = opts.cache || 0;
 
-function watchFile(filename, cb) {
+	// Load file, if smaller than 500kb, keep in mem by default, option
+	// TODO: Start watching file
+	var self = this;
 	var timeout;
-	try {
-		fs.watch(filename, {persistent: false}, changed);
-	} catch(e) {
-		if(e.code == 'ENOENT') {
-			console.warn('ex-static: File will not be watched or loaded as it does not exist: ' + filename);
-		} else throw e;
-	}
-	changed();
-	
-	function changed(type) {
+	fs.watch(this.path, {persistent: false}, function() {
 		if(timeout == null) { // Wait since events sometimes fire multiple times in quick succession
 			timeout = setTimeout(function() {
-				cb();
+				self._setup();
 				timeout = null;
 			}, 20);
 		}
-	}
+	});
+	this._setup();
 }
+File.prototype._setup = function(type, name) {
+	delete this.fileData;
+	delete this.zippedData;
 
-function handleRequest(staticCache, req, res, next) {
-	var method = req.method.toUpperCase();
-	if(method != 'GET' && method != 'HEAD') {
-		if(next) next();
-		else {
-			res.writeHead(405);
-			res.end();
+	var self = this;
+	fs.stat(this.path, function(err, stats) {
+		if(err) {
+			self.notFound = true;
+			return;
 		}
-		return;
-	}
-	
-	var file = staticCache[url.parse(req.url).pathname];
-	
-	if(file != null) {
-		var data;
-		var not_modified = false;
-		var headers = {'Content-Type': file.type, 'ETag': file.etag};
-		
-		var modifiedSince = req.headers['if-modified-since'], noneMatch = req.headers['if-none-match'];
-		if(modifiedSince != null && file.timeLoaded <= new Date(modifiedSince).getTime()) { // If their entity is up-to-date
-			not_modified = true;
-		} else if(noneMatch != null && noneMatch == file.etag) { // If the etags match
-			not_modified = true;
+		self.size = stats.size;
+		self.modified = stats.mtime.getTime();
+		if(self.stream == null) {
+			self.stream = (self.size > DEFAULT_MAX_SIZE);
 		}
-		
-		if(not_modified) {
-			res.writeHead(304);
-			res.end();
-		} else {
-			var acceptEncoding = req.headers['accept-encoding'];
-			if(file.compressed != null && acceptEncoding != null && acceptEncoding.indexOf('gzip') != -1) { // The file and browser support gzip compression
-				data = file.compressed;
-				headers['Content-Encoding'] = 'gzip';
-			} else {
-				data = file.data;
-			}
-			headers['Content-Length'] = data.length;
-			
-			if(file.cache < 0) file.cache = 31536000;
-			else if(file.cache > 0) {
-				headers['Cache-Control'] = 'max-age=' + file.cache;
-			}
-			
-			if(req.method == 'HEAD') data = null;
-			res.writeHead(200, headers);
-			res.end(data);
-			// How do we log?
-		}
-	} else {
-		if(next) next();
-		else { // No file and not in a middleware manager
-			res.writeHead(404);
-			res.end();
-		}
-	}
-}
 
-module.exports = function(files) {
-	var staticCache = {};
-	
-	files.forEach(function(options) {
-		var url = options.url;
-		var filename = options.path;
-		var cache = options.cache;
-		
-		watchFile(filename, function() {
-			loadFile(filename, function(file) {
-				finishFile(file, url, cache, Boolean(options.compress), options.type, function(file) {
-					delete staticCache[url];
-					if(file.data != null) {
-						staticCache[url] = file;
+		if(!self.stream) {
+			fs.readFile(self.path, function(err, data) {
+				self.fileData = data;
+				self.etag = crypto.createHash('md5').update(data).digest('hex');
+
+				if(self.compress) zlib.gzip(data, function(err, zipped) {
+					if(zipped.length < (data.length * 0.9)) {
+						self.zippedData = zipped;
 					}
 				});
 			});
-		});
+		} else {
+			var s = fs.createReadStream(self.path);
+			var h = crypto.createHash('md5');
+			s.pipe(h, {end: false});
+			s.on('end', function() {
+				self.etag = h.digest('hex');
+			});
+		}
 	});
+
 	
-	return handleRequest.bind(null, staticCache);
 }
+File.prototype.serve = function(req, res) {
+	if(this.notFound) {
+		res.writeHead(404);
+		res.end('404 File Not Found');
+		return;
+	}
+
+	var h = {
+		'Content-Type': this.type,
+		'ETag': this.etag
+	};
+
+	var modifiedSince = req.headers['if-modified-since'];
+	var noneMatch = req.headers['if-none-match'];
+	if(modifiedSince != null && this.modified <= new Date(modifiedSince).getTime()) {
+		res.writeHead(304);
+		res.end();
+		return;
+	} else if(noneMatch != null && noneMatch === this.etag) {
+		res.writeHead(304);
+		res.end();
+		return;
+	}
+
+	var data;
+	var acceptEncoding = req.headers['accept-encoding'];
+	var compress = (acceptEncoding != null && acceptEncoding.indexOf('gzip') !== -1) && this.compress;
+	if(compress) {
+		h['Content-Encoding'] = 'gzip';
+		if(this.zippedData) {
+			data = this.zippedData;
+			h['Content-Length'] = data.length;
+		}
+	} else {
+		h['Content-Length'] = this.size;
+		if(this.fileData) {
+			data = this.fileData;
+		}
+	}
+
+	if(this.cache > 0) {
+		h['Cache-Control'] = 'max-age=' + this.cache;
+	}
+
+	if(req.method === 'HEAD') {
+		res.writeHead(200, h);
+		res.end();
+		return;
+	}
+
+	res.writeHead(200, h);
+	if(data) {
+		res.end(data);
+	} else {
+		var s = fs.createReadStream(this.path);
+		if(compress) {
+			s.pipe(zlib.createGzip()).pipe(res);
+		} else {
+			s.pipe(res);
+		}
+	}
+}
+
 // TODO: Write tests and update README
+
+function createMiddlware(files) {
+	var table = {};
+	files.forEach(function(file) {
+		table[file.url] = new File(file);
+	});
+
+	return function(req, res, next) {
+		var path = url.parse(req.url).pathname;
+
+		if(req.method !== 'GET' && req.method !== 'HEAD') {
+			if(next) next();
+			else {
+				res.writeHead(405);
+				res.end('405 Method not allowed');
+			}
+			return;
+		}
+
+		var file = table[path];
+		if(file) {
+			file.serve(req, res);
+		} else {
+			next();
+		}
+	}
+}
+
+createMiddlware.File = File;
+module.exports = createMiddlware;
