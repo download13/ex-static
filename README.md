@@ -1,38 +1,29 @@
 ex-static
 =========
 
-**WARNING: DO NOT USE ON LARGE FILES!**
-`ex-static` keeps all file data in memory and so is not recommended for files larger than a megabyte (unless you have a lot of spare RAM).
-Now also watches files for changes and reloads them when needed.
+Serves files. It's pretty fast.
 
 ### To use:
 ```javascript
 var http = require('http');
 var static = require('ex-static');
 
-var staticFiles = [
+var files = [
 	{url: '/', path: 'static/index.html'},
-	{url: '/test.jar', path: 'static/test.jar', type: 'application/java-archive', cache: -1, compress: true}
+	{url: '/test.jar', path: 'static/test.jar', type: 'application/java-archive', cache: 300000, compress: true}
 ];
 
-http.createServer(staticFiles).listen(80);
+http.createServer(static(files)).listen(80);
 ```
 
-The `cache` parameter sets the number of seconds on the `Cache-Control: max-age` header. Using -1 sets a very large value while using 0 sets no header.
+* `cache` - Sets the number of seconds on the `Cache-Control: max-age` header. Using 0 sets no header.
+* `type`  - Used to specify a `Content-Type`, or override the default type associated with the file extension.
+* `compress` - Set whether we should use compression. Small files have it on by default.
+* `stream` - True if the file should be streamed to the client, false if it should be written in one chunk. Defaults to true for small files.
+* `path` - The local file path where the file can be found.
+* `url` - The url where the file should be served.
+
+
 All files have `ETag` values that are the MD5 hashes of their contents.
-`type` is used to specify a `Content-Type`, or override the default type associated with the file extension.
-All `text/*` files are compressed with `gzip` for browsers that support it. To override the default compression setting for a file, use the `compress` parameter.
 
-`ex-static` also supports automatic revving of HTML files.
-Any instance of the string `{rev}` in an HTML file will be replaced with a timestamp when the static server starts up.
-This is useful for ensuring that users have the latest version of a file even if the `cache` option is enabled.
-### Example:
-```html
-<!DOCTYPE html>
-<html>
-<head>
-<script src="/js/main.js?{rev}"></script>
-</head>
-<body></body>
-</html>
-```
+Small files are compressed with gzip for browsers that support it. To override the default compression setting for a file, use the `compress` parameter.
